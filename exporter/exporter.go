@@ -91,20 +91,19 @@ func (e *Exporter) collectProjectStats(ch chan<- prometheus.Metric, organization
 		} else if len(stats) == 0 {
 			log.Warnf("requested stat type %s for project %s returned no results", sd.queryName, *project.Slug)
 		} else {
-			for _, stat := range stats {
-				log.Debugf("stat type %s for project %s returned %v", sd.queryName, *project.Slug, stats)
-				ch <- prometheus.NewMetricWithTimestamp(
-					time.Unix(int64(stat[0]), 0),
-					prometheus.MustNewConstMetric(
-						sd.desc,
-						prometheus.GaugeValue,
-						stat[1],
-						*(organization.Slug),
-						*(team.Slug),
-						*(project.Slug),
-					),
-				)
-			}
+			log.Debugf("stat type %s for project %s returned %v", sd.queryName, *project.Slug, stats)
+			lastStat := stats[len(stats)]
+			ch <- prometheus.NewMetricWithTimestamp(
+				time.Unix(int64(lastStat[0]), 0),
+				prometheus.MustNewConstMetric(
+					sd.desc,
+					prometheus.GaugeValue,
+					lastStat[1],
+					*(organization.Slug),
+					*(team.Slug),
+					*(project.Slug),
+				),
+			)
 		}
 	}
 	log.Debugf("finished project stats pull for organization %s, team %s, project %s", *(organization.Slug), *(team.Slug), *(project.Slug))
@@ -116,7 +115,7 @@ func NewExporter(client *sentry.Client, namespace string) (*Exporter, error) {
 	return &Exporter{
 		client:                 client,
 		statResolution:         "10s",
-		statResolutionDuration: time.Second * 20,
+		statResolutionDuration: time.Minute,
 		projectStats: []projectStatsDesc{
 			{
 				queryName: "received",
