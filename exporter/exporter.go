@@ -10,16 +10,16 @@ import (
 	"github.com/prometheus/common/log"
 )
 
-type projectStatsDesc struct {
-	queryName string
-	query     sentry.StatQuery
-	desc      *prometheus.Desc
+var collectedProjectStats = map[string]sentry.StatQuery{
+	"received":    sentry.StatReceived,
+	"rejected":    sentry.StatRejected,
+	"blacklisted": sentry.StatBlacklisted,
 }
 
 // Exporter exporter for
 type Exporter struct {
 	client                 *sentry.Client
-	projectStats           []projectStatsDesc
+	projectStatDesc        *prometheus.Desc
 	statResolution         string
 	statResolutionDuration time.Duration
 	sentryUp               *prometheus.Desc
@@ -27,9 +27,7 @@ type Exporter struct {
 
 // Describe visit all prometheus.Desc contained in this exporter
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
-	for _, sd := range e.projectStats {
-		ch <- sd.desc
-	}
+	ch <- e.projectStatDesc
 	ch <- e.sentryUp
 }
 
@@ -87,31 +85,32 @@ func (e *Exporter) collectProjectStats(ch chan<- prometheus.Metric, organization
 	log.Debugf("spawning project stats pull for organization %s, team %s, project %s", *(organization.Slug), *(team.Slug), *(project.Slug))
 	until := time.Now()
 	since := until.Add(-e.statResolutionDuration)
-	for _, sd := range e.projectStats {
+	for eventType, statQuery := range collectedProjectStats {
 		stats, err := e.client.GetProjectStats(
 			*organization,
 			*project,
-			sd.query,
+			statQuery,
 			since.Unix(),
 			until.Unix(),
 			&e.statResolution,
 		)
 		if err != nil {
-			log.Warnf("failed fetching stat type %s for project %s; err %s", sd.query, *project.Slug, err)
+			log.Warnf("failed fetching stat type %s for project %s; err %s", eventType, *project.Slug, err)
 		} else if len(stats) == 0 {
-			log.Warnf("requested stat type %s for project %s returned no results", sd.queryName, *project.Slug)
+			log.Warnf("requested stat type %s for project %s returned no results", eventType, *project.Slug)
 		} else {
-			log.Debugf("stat type %s for project %s returned %v", sd.queryName, *project.Slug, stats)
+			log.Debugf("stat type %s for project %s returned %v", eventType, *project.Slug, stats)
 			lastStat := stats[len(stats)-1]
 			ch <- prometheus.NewMetricWithTimestamp(
 				time.Unix(int64(lastStat[0]), 0),
 				prometheus.MustNewConstMetric(
-					sd.desc,
+					e.projectStatDesc,
 					prometheus.GaugeValue,
 					lastStat[1],
 					*(organization.Slug),
 					*(team.Slug),
 					*(project.Slug),
+					eventType,
 				),
 			)
 		}
@@ -121,43 +120,17 @@ func (e *Exporter) collectProjectStats(ch chan<- prometheus.Metric, organization
 
 // NewExporter create a new sentry exporter
 func NewExporter(client *sentry.Client, namespace string) (*Exporter, error) {
-	projectLabels := []string{"organization_slug", "team_slug", "project_slug"}
+	projectLabels := []string{"organization_slug", "team_slug", "project_slug", "type"}
 	return &Exporter{
 		client:                 client,
 		statResolution:         "10s",
 		statResolutionDuration: time.Minute,
-		projectStats: []projectStatsDesc{
-			{
-				queryName: "received",
-				query:     sentry.StatReceived,
-				desc: prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, "project", "received_events_count"),
-					"project count for received events",
-					projectLabels,
-					nil,
-				),
-			},
-			{
-				queryName: "rejected",
-				query:     sentry.StatRejected,
-				desc: prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, "project", "rejected_events_count"),
-					"project count for rejected events",
-					projectLabels,
-					nil,
-				),
-			},
-			{
-				queryName: "blacklisted",
-				query:     sentry.StatBlacklisted,
-				desc: prometheus.NewDesc(
-					prometheus.BuildFQName(namespace, "project", "blacklisted_events_count"),
-					"project count for blacklisted events",
-					projectLabels,
-					nil,
-				),
-			},
-		},
+		projectStatDesc: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "project", "events_count"),
+			"project count for received events of a given type",
+			projectLabels,
+			nil,
+		),
 		sentryUp: prometheus.NewDesc(
 			fmt.Sprintf("%s_up", namespace),
 			"boolean, 1 if the sentry instance was reachable, zero if not",
