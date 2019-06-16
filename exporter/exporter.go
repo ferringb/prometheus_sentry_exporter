@@ -124,7 +124,7 @@ func NewExporter(client *sentry.Client, namespace string) (*Exporter, error) {
 	return &Exporter{
 		client:                 client,
 		statResolution:         "10s",
-		statResolutionDuration: time.Minute,
+		statResolutionDuration: time.Second * 15,
 		projectStatDesc: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "project", "events_count"),
 			"project count for received events of a given type",
