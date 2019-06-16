@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -21,6 +22,7 @@ type Exporter struct {
 	projectStats           []projectStatsDesc
 	statResolution         string
 	statResolutionDuration time.Duration
+	sentryUp               *prometheus.Desc
 }
 
 // Describe visit all prometheus.Desc contained in this exporter
@@ -28,6 +30,7 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	for _, sd := range e.projectStats {
 		ch <- sd.desc
 	}
+	ch <- e.sentryUp
 }
 
 // Collect visit all prometheus metrics contained in this exporter
@@ -66,9 +69,16 @@ func (e *Exporter) collectOrganizations(ch chan<- prometheus.Metric) {
 		link, err = e.client.GetPage(link.Next, organizations)
 		log.Debugf("organization pagination results were %v, err=%v", link, err)
 	}
+	upVal := float64(1)
 	if err != nil {
 		log.Errorf("failed spawning organizations: %s", err)
+		upVal = 0
 	}
+	ch <- prometheus.MustNewConstMetric(
+		e.sentryUp,
+		prometheus.GaugeValue,
+		upVal,
+	)
 	wg.Wait()
 	log.Debug("finished organizations")
 }
@@ -92,7 +102,7 @@ func (e *Exporter) collectProjectStats(ch chan<- prometheus.Metric, organization
 			log.Warnf("requested stat type %s for project %s returned no results", sd.queryName, *project.Slug)
 		} else {
 			log.Debugf("stat type %s for project %s returned %v", sd.queryName, *project.Slug, stats)
-			lastStat := stats[len(stats)]
+			lastStat := stats[len(stats)-1]
 			ch <- prometheus.NewMetricWithTimestamp(
 				time.Unix(int64(lastStat[0]), 0),
 				prometheus.MustNewConstMetric(
@@ -148,5 +158,11 @@ func NewExporter(client *sentry.Client, namespace string) (*Exporter, error) {
 				),
 			},
 		},
+		sentryUp: prometheus.NewDesc(
+			fmt.Sprintf("%s_up", namespace),
+			"boolean, 1 if the sentry instance was reachable, zero if not",
+			nil,
+			nil,
+		),
 	}, nil
 }
