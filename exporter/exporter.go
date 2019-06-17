@@ -19,6 +19,7 @@ var collectedProjectStats = map[string]sentry.StatQuery{
 // Exporter exporter for
 type Exporter struct {
 	client                 *sentry.Client
+	maxFetchConccurrency   uint32
 	projectStatDesc        *prometheus.Desc
 	statResolution         string
 	statResolutionDuration time.Duration
@@ -36,27 +37,51 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.collectOrganizations(ch)
 }
 
+type projectFetchJob struct {
+	organization sentry.Organization
+	project      sentry.Project
+	team         sentry.Team
+}
+
 func (e *Exporter) collectOrganizations(ch chan<- prometheus.Metric) {
 	var wg sync.WaitGroup
 	log.Debug("spawning organization")
 	organizations, link, err := e.client.GetOrganizations()
 
+	// note: go-sentry-api doesn't use pointers in a sane way, so this has to do
+	// a *lot* of copying.  Upstream API has to improve for this to improve.
+	workQueue := make(chan *projectFetchJob, e.maxFetchConccurrency)
+	for i := uint32(0); i < e.maxFetchConccurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				work, more := <-workQueue
+				if !more {
+					return
+				}
+				e.collectProjectStats(ch, &work.organization, &work.team, &work.project)
+			}
+		}()
+	}
+
 	for len(organizations) != 0 && err == nil {
-		for _, organization := range organizations {
+		for orgIdx := range organizations {
 			// repull the org; API doesn't give us useful results, but
 			// GetOrganization gets the team/project listing we want.
-			org, err := e.client.GetOrganization(*(organization.Slug))
+			org, err := e.client.GetOrganization(*(organizations[orgIdx].Slug))
 			if err != nil {
-				log.Errorf("failed pulling organization details for %s: err %s", (*organization.Slug), err)
+				log.Errorf("failed pulling organization details for %s: err %s", (*organizations[orgIdx].Slug), err)
 				continue
 			}
 			for _, team := range *(org.Teams) {
+
 				for _, project := range *(team.Projects) {
-					wg.Add(1)
-					go func(organization sentry.Organization, project sentry.Project, team sentry.Team) {
-						defer wg.Done()
-						e.collectProjectStats(ch, &organization, &team, &project)
-					}(org, project, team)
+					workQueue <- &projectFetchJob{
+						organization: org,
+						project:      project,
+						team:         team,
+					}
 				}
 			}
 
@@ -67,6 +92,7 @@ func (e *Exporter) collectOrganizations(ch chan<- prometheus.Metric) {
 		link, err = e.client.GetPage(link.Next, organizations)
 		log.Debugf("organization pagination results were %v, err=%v", link, err)
 	}
+	close(workQueue)
 	upVal := float64(1)
 	if err != nil {
 		log.Errorf("failed spawning organizations: %s", err)
@@ -119,10 +145,11 @@ func (e *Exporter) collectProjectStats(ch chan<- prometheus.Metric, organization
 }
 
 // NewExporter create a new sentry exporter
-func NewExporter(client *sentry.Client, namespace string) (*Exporter, error) {
+func NewExporter(client *sentry.Client, maxFetchConccurrency uint32, namespace string) (*Exporter, error) {
 	projectLabels := []string{"organization_slug", "team_slug", "project_slug", "type"}
 	return &Exporter{
 		client:                 client,
+		maxFetchConccurrency:   maxFetchConccurrency,
 		statResolution:         "10s",
 		statResolutionDuration: time.Second * 15,
 		projectStatDesc: prometheus.NewDesc(
