@@ -16,7 +16,7 @@ var collectedProjectStats = map[string]sentry.StatQuery{
 	"blacklisted": sentry.StatBlacklisted,
 }
 
-// Exporter exporter for
+// Exporter exporter for sentry metrics
 type Exporter struct {
 	client                 *sentry.Client
 	maxFetchConccurrency   uint32
@@ -24,17 +24,31 @@ type Exporter struct {
 	statResolution         string
 	statResolutionDuration time.Duration
 	sentryUp               *prometheus.Desc
+	scrapeDurationDesc     *prometheus.Desc
+	totalScrapes           prometheus.Counter
 }
 
 // Describe visit all prometheus.Desc contained in this exporter
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- e.projectStatDesc
 	ch <- e.sentryUp
+	ch <- e.scrapeDurationDesc
+	ch <- e.totalScrapes.Desc()
 }
 
 // Collect visit all prometheus metrics contained in this exporter
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
+	start := time.Now()
+	defer func() {
+		ch <- prometheus.MustNewConstMetric(
+			e.scrapeDurationDesc,
+			prometheus.GaugeValue,
+			time.Since(start).Seconds(),
+		)
+	}()
 	e.collectOrganizations(ch)
+	e.totalScrapes.Inc()
+	ch <- e.totalScrapes
 }
 
 type projectFetchJob struct {
@@ -164,5 +178,17 @@ func NewExporter(client *sentry.Client, maxFetchConccurrency uint32, namespace s
 			nil,
 			nil,
 		),
+		scrapeDurationDesc: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "exporter", "last_scrape_duration_seconds"),
+			"duration in seconds for the last scrape",
+			nil,
+			nil,
+		),
+		totalScrapes: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "exporter",
+			Name:      "scrapes_total",
+			Help:      "total number of scrapes",
+		}),
 	}, nil
 }
