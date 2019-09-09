@@ -54,7 +54,7 @@ func main() {
 		log.Fatal(err.Error())
 	}
 	if *sentryConcurrency <= 0 {
-		log.Fatalf("-senty.concurency needs to be >= 1, got %d", *sentryConcurrency)
+		log.Fatalf("-senrty.concurency needs to be >= 1, got %d", *sentryConcurrency)
 	}
 	if err := log.Base().SetLevel(*logLevel); err != nil {
 		log.Fatal(err.Error())
