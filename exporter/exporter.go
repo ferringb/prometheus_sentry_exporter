@@ -151,8 +151,11 @@ func (e *Exporter) collectProjectStats(ch chan<- prometheus.Metric, organization
 					prometheus.GaugeValue,
 					lastStat[1],
 					*(organization.Slug),
+					*(organization.ID),
 					*(team.Slug),
+					*(team.ID),
 					*(project.Slug),
+					project.ID,
 					eventType,
 				),
 			)
@@ -163,7 +166,7 @@ func (e *Exporter) collectProjectStats(ch chan<- prometheus.Metric, organization
 
 // NewExporter create a new sentry exporter
 func NewExporter(client *sentry.Client, maxFetchConccurrency uint32, namespace string) (*Exporter, error) {
-	projectLabels := []string{"organization_slug", "team_slug", "project_slug", "type"}
+	projectLabels := []string{"organization_slug", "organization_id", "team_slug", "team_id", "project_slug", "project_id", "type"}
 	return &Exporter{
 		client:                 client,
 		maxFetchConccurrency:   maxFetchConccurrency,
