@@ -65,6 +65,11 @@ func (e *Exporter) collectOrganizations(ch chan<- prometheus.Metric) {
 	// note: go-sentry-api doesn't use pointers in a sane way, so this has to do
 	// a *lot* of copying.  Upstream API has to improve for this to improve.
 	workQueue := make(chan *projectFetchJob, e.maxFetchConccurrency)
+	defer func() {
+		close(workQueue)
+		wg.Wait()
+	}()
+
 	for i := uint32(0); i < e.maxFetchConccurrency; i++ {
 		wg.Add(1)
 		go func() {
@@ -106,19 +111,17 @@ func (e *Exporter) collectOrganizations(ch chan<- prometheus.Metric) {
 		link, err = e.client.GetPage(link.Next, organizations)
 		log.Debugf("organization pagination results were %v, err=%v", link, err)
 	}
-	close(workQueue)
 	upVal := float64(1)
 	if err != nil {
 		log.Errorf("failed spawning organizations: %s", err)
 		upVal = 0
 	}
+	log.Debug("finished organizations")
 	ch <- prometheus.MustNewConstMetric(
 		e.sentryUp,
 		prometheus.GaugeValue,
 		upVal,
 	)
-	wg.Wait()
-	log.Debug("finished organizations")
 }
 
 func (e *Exporter) collectProjectStats(ch chan<- prometheus.Metric, organization *sentry.Organization, team *sentry.Team, project *sentry.Project) {
